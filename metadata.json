@@ -1,0 +1,6 @@
+{
+  "name": "ReflectJournal",
+  "description": "A secure, private journaling application powered by AI for reflections and brainstorming.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
