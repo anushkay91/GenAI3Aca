@@ -24,7 +24,7 @@ async function startServer() {
 
   apiRouter.post("/chat", async (req, res) => {
     console.log("Received request to /api/chat");
-    const { prompt } = req.body;
+    const { prompt, history } = req.body;
     console.log("Prompt:", prompt);
     if (!prompt) {
       console.log("Prompt missing");
@@ -36,9 +36,15 @@ async function startServer() {
         console.error("GEMINI_API_KEY is not defined");
         return res.status(500).json({ error: "Server configuration error" });
       }
-      const { GoogleGenAI } = await import("@google/genai");
+      const { GoogleGenAI, Type } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
+      let promptContent = prompt;
+      if (history && Array.isArray(history) && history.length > 0) {
+        const historyText = history.map((entry: any, i: number) => `Entry ${i+1}:\nUser: ${entry.text}\nMood: ${entry.mood}\nScore: ${entry.score}`).join('\n\n');
+        promptContent = `You are a personal journaling assistant. You have access to the user's past journal entries and moods. Use this context to provide personalized analytical decisions, reflections, and insights on their current entry.\n\n### PAST HISTORY ###\n${historyText}\n\n### NEW ENTRY ###\n${prompt}`;
+      }
+
       const models = ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.7-flash"];
       let result;
       
@@ -46,7 +52,19 @@ async function startServer() {
         try {
           result = await ai.models.generateContent({
             model: modelName,
-            contents: prompt,
+            contents: promptContent,
+            config: {
+               responseMimeType: "application/json",
+               responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    response: { type: Type.STRING, description: "Your response to the journal entry." },
+                    mood: { type: Type.STRING, description: "A single word summarizing the mood of the entry." },
+                    score: { type: Type.INTEGER, description: "A score from 1 to 100 representing the sentiment, 100 being highly positive." }
+                  },
+                  required: ["response", "mood", "score"]
+               }
+            }
           });
           break;
         } catch (e) {
@@ -55,9 +73,10 @@ async function startServer() {
         }
       }
 
-      if (!result) throw new Error("All models failed");
+      if (!result || !result.text) throw new Error("All models failed or no text returned");
       
-      res.json({ response: result.text });
+      const parsed = JSON.parse(result.text);
+      res.json(parsed);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to generate response" });

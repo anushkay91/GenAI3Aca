@@ -3,11 +3,14 @@ import { auth, db } from '../lib/firebase';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { useState, useEffect } from 'react';
 import { AlertCircle, RotateCcw, Send, Sparkles, LogOut, CheckCircle2 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface JournalEntry {
   id: string;
   text: string;
   aiResponse: string;
+  mood?: string;
+  score?: number;
   createdAt?: any;
 }
 
@@ -55,10 +58,16 @@ export default function Dashboard({ user }: { user: User }) {
     setSuccessToast(null);
 
     try {
+      const history = entries.slice(0, 10).map(entry => ({
+        text: entry.text,
+        mood: entry.mood,
+        score: entry.score
+      })).reverse(); // Send oldest first
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: trimmedPrompt, userId: user.uid }),
+        body: JSON.stringify({ prompt: trimmedPrompt, userId: user.uid, history }),
       });
 
       const data = await response.json();
@@ -70,6 +79,8 @@ export default function Dashboard({ user }: { user: User }) {
       const rawPayload = {
         text: trimmedPrompt,
         aiResponse: data.response || "No reflection generated.",
+        mood: data.mood,
+        score: data.score,
         createdAt: serverTimestamp(),
       };
 
@@ -99,6 +110,12 @@ export default function Dashboard({ user }: { user: User }) {
     }
     return 'Recent';
   };
+
+  const chartData = [...entries].reverse().map((entry, index) => ({
+    name: `Entry ${index + 1}`,
+    score: entry.score || 0,
+    date: formatDate(entry.createdAt)
+  })).filter(entry => entry.score > 0);
 
   return (
     <div className="max-w-4xl mx-auto p-6 md:p-10">
@@ -189,6 +206,27 @@ export default function Dashboard({ user }: { user: User }) {
         </div>
       </div>
 
+      {/* Mood Analytics */}
+      {entries.length > 0 && chartData.length > 0 && (
+        <div className="bg-white border border-neutral-200 rounded-xl p-6 shadow-sm mb-10">
+          <h2 className="text-lg font-bold text-neutral-900 mb-4">Mood Analytics</h2>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} />
+                <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                  labelStyle={{ fontWeight: 'bold', color: '#333' }}
+                />
+                <Line type="monotone" dataKey="score" stroke="#d97706" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
       {/* Journal History */}
       <div>
         <div className="flex items-center justify-between mb-4">
@@ -212,7 +250,14 @@ export default function Dashboard({ user }: { user: User }) {
                 className="bg-white border border-neutral-200 rounded-xl p-5 shadow-xs transition hover:border-neutral-300"
               >
                 <div className="flex justify-between items-start text-xs text-neutral-400 mb-2">
-                  <span className="font-semibold uppercase tracking-wider text-neutral-500">Reflection</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold uppercase tracking-wider text-neutral-500">Reflection</span>
+                    {entry.mood && (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
+                        {entry.mood}
+                      </span>
+                    )}
+                  </div>
                   <span>{formatDate(entry.createdAt)}</span>
                 </div>
                 <p className="text-neutral-900 font-medium text-sm leading-relaxed whitespace-pre-wrap">{entry.text}</p>
