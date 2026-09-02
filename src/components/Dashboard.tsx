@@ -113,9 +113,9 @@ export default function Dashboard({ user }: { user: User }) {
 
   const chartData = [...entries].reverse().map((entry, index) => ({
     name: `Entry ${index + 1}`,
-    score: entry.score || 0,
+    score: Number(entry.score) || 50,
     date: formatDate(entry.createdAt)
-  })).filter(entry => entry.score > 0);
+  }));
 
   return (
     <div className="max-w-4xl mx-auto p-6 md:p-10">
