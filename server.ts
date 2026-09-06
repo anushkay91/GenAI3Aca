@@ -3,12 +3,72 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 
+// Resilient Model Fallback Ladder
+const GEMINI_MODELS = [
+  "gemini-3.6-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+  "gemini-3.7-flash",
+];
+
+async function generateContentWithFallback(prompt: string, apiKey: string): Promise<string> {
+  const { GoogleGenAI, Type } = await import("@google/genai");
+  const ai = new GoogleGenAI({ apiKey });
+
+  let lastError: any = null;
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                response: { type: Type.STRING },
+                mood: { type: Type.STRING },
+                score: { type: Type.INTEGER },
+                category: { type: Type.STRING }
+              },
+              required: ["response", "mood", "score", "category"]
+            }
+        }
+      });
+      if (response && response.text) {
+        return response.text;
+      }
+    } catch (err: any) {
+      console.warn(`[Gemini Fallback] Model ${modelName} failed:`, err?.message || err);
+      lastError = err;
+      // Recoverable error check: 503 UNAVAILABLE, 404 NOT_FOUND, 500 INTERNAL
+      const status = err?.status || err?.code || (err?.error && err?.error?.code);
+      
+      // Quota exhausted, don't waste time trying others
+      if (status === 429 || status === "RESOURCE_EXHAUSTED") {
+        throw err;
+      }
+      
+      if (
+        status === 503 ||
+        status === 404 ||
+        status === 500 ||
+        status === "UNAVAILABLE"
+      ) {
+        continue;
+      }
+      continue;
+    }
+  }
+  throw lastError || new Error("All Gemini models in fallback ladder failed.");
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
-  // Body parsing middleware
-  app.use(express.json());
+  // 1. Top-Level Request Deserialization (Ordering Guarantee)
+  app.use(express.json({ limit: "1mb" }));
   
   // Debugging middleware
   app.use((req, res, next) => {
@@ -18,74 +78,80 @@ async function startServer() {
 
   // API routes
   const apiRouter = express.Router();
-  apiRouter.get("/health", (req, res) => {
-    res.json({ status: "ok" });
+  apiRouter.get("/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      port: PORT,
+      env: process.env.NODE_ENV || "development",
+      time: new Date().toISOString(),
+    });
   });
 
   apiRouter.post("/chat", async (req, res) => {
-    console.log("Received request to /api/chat");
-    const { prompt, history } = req.body;
-    console.log("Prompt:", prompt);
+    // 2. Defensive Payload Ingestion (Null-Safe Destructuring)
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const history = Array.isArray(body.history) ? body.history : [];
+
     if (!prompt) {
-      console.log("Prompt missing");
-      return res.status(400).json({ error: "Prompt required" });
+      return res.status(400).json({ error: "Prompt is required and must be non-empty" });
     }
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("[Server Error] GEMINI_API_KEY is not defined");
+      return res.status(500).json({ error: "Server configuration error: GEMINI_API_KEY missing" });
+    }
+
+    // Prepare system prompt with history
+    const historyContext = history.length > 0 
+      ? `Here are the user's last ${history.length} journal entries for context:\n${history.map((e: any) => `Entry: "${e.text}" | AI Response: "${e.aiResponse}"`).join('\n')}\n`
+      : "";
+
+    const systemPrompt = `You are an empathetic, analytical journaling assistant and psychological profiler. Your primary goal is to read the user's journal entry, provide a supportive and insightful reflection, and precisely analyze their emotional state to plot on a mood tracker graph.
+
+You MUST return your answer as a raw, valid JSON object. Do not use markdown blocks (e.g., \`\`\`json). Do not add any conversational text outside the JSON.
+
+Use this exact JSON structure:
+{
+  "response": "A thoughtful, conversational, and empathetic response. Ask one gentle follow-up question if appropriate.",
+  "mood": "One word summary of dominant emotion",
+  "score": 50, // Integer score 1-100 based on the rubric below
+  "category": "Work/Family/Health/Relationships/Finance/Hobbies"
+}
+
+### Rubric for 'score' (1-100):
+1 - 20: Severe distress, depression, extreme anger, grief, or panic.
+21 - 40: Anxious, stressed, frustrated, overwhelmed, or sad.
+41 - 59: Neutral, bored, tired, "just okay", or mixed feelings.
+60 - 79: Calm, content, productive, peaceful, or mildly happy.
+80 - 100: Euphoric, highly energetic, extremely joyful, deeply grateful, or ecstatic.
+
+Only output valid JSON.`;
+
     try {
-      if (!process.env.GEMINI_API_KEY) {
-        console.error("GEMINI_API_KEY is not defined");
-        return res.status(500).json({ error: "Server configuration error" });
-      }
-      const { GoogleGenAI, Type } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const responseText = await generateContentWithFallback(`${systemPrompt}\nUser: ${prompt}`, apiKey);
+      const parsed = JSON.parse(responseText);
       
-      let promptContent = prompt;
-      if (history && Array.isArray(history) && history.length > 0) {
-        const historyText = history.map((entry: any, i: number) => `Entry ${i+1}:\nUser: ${entry.text}\nMood: ${entry.mood}\nScore: ${entry.score}`).join('\n\n');
-        promptContent = `You are a personal journaling assistant. You have access to the user's past journal entries and moods. Use this context to provide personalized analytical decisions, reflections, and insights on their current entry.\n\n### PAST HISTORY ###\n${historyText}\n\n### NEW ENTRY ###\n${prompt}`;
-      }
-
-      const models = ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.7-flash"];
-      let result;
-      
-      for (const modelName of models) {
-        try {
-          result = await ai.models.generateContent({
-            model: modelName,
-            contents: promptContent,
-            config: {
-               responseMimeType: "application/json",
-               responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    response: { type: Type.STRING, description: "Your response to the journal entry." },
-                    mood: { type: Type.STRING, description: "A single word summarizing the mood of the entry." },
-                    score: { type: Type.INTEGER, description: "A score from 1 to 100 representing the sentiment, 100 being highly positive." }
-                  },
-                  required: ["response", "mood", "score"]
-               }
-            }
-          });
-          break;
-        } catch (e) {
-          console.warn(`Model ${modelName} failed:`, e);
-          continue;
-        }
-      }
-
-      if (!result || !result.text) throw new Error("All models failed or no text returned");
-      
-      const parsed = JSON.parse(result.text);
-      res.json(parsed);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to generate response" });
+      // Enforce schema
+      return res.json({
+        response: String(parsed.response || "No reflection generated."),
+        mood: String(parsed.mood || "Neutral"),
+        score: parseInt(String(parsed.score), 10) || 50,
+        category: String(parsed.category || "Other")
+      });
+    } catch (error: any) {
+      console.error("[Gemini Error]", error);
+      return res.status(500).json({
+        error: "Failed to generate reflection",
+        details: error?.message || "All models failed or invalid JSON returned",
+      });
     }
   });
 
   app.use("/api", apiRouter);
 
-  // Vite middleware for development
+  // Vite middleware for development vs static bundle for production
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -93,15 +159,15 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT} (NODE_ENV=${process.env.NODE_ENV || "development"})`);
   });
 }
 

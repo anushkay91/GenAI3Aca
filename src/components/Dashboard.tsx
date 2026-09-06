@@ -1,8 +1,8 @@
 import { User, signOut } from 'firebase/auth';
 import { auth, db } from '../lib/firebase';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
 import { useState, useEffect } from 'react';
-import { AlertCircle, RotateCcw, Send, Sparkles, LogOut, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, RotateCcw, Send, Sparkles, LogOut, CheckCircle2, Trash2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface JournalEntry {
@@ -97,6 +97,26 @@ export default function Dashboard({ user }: { user: User }) {
       setErrorMessage(error?.message || 'Failed to generate reflection or save entry. Your draft has been preserved.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const [entryToDelete, setEntryToDelete] = useState<string | null>(null);
+
+  const initiateDelete = (entryId: string) => {
+    setEntryToDelete(entryId);
+  };
+
+  const confirmDelete = async () => {
+    if (!entryToDelete) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'entries', entryToDelete));
+      setSuccessToast('Reflection deleted successfully.');
+      setTimeout(() => setSuccessToast(null), 4000);
+      setEntryToDelete(null);
+    } catch (error) {
+      console.error('Error deleting entry:', error);
+      setErrorMessage('Failed to delete the entry.');
+      setEntryToDelete(null);
     }
   };
 
@@ -243,7 +263,7 @@ export default function Dashboard({ user }: { user: User }) {
           </div>
         ) : (
           <div className="space-y-4">
-            {entries.map((entry) => (
+            {entries.map((entry, index) => (
               <div
                 key={entry.id}
                 id={`entry-${entry.id}`}
@@ -251,14 +271,23 @@ export default function Dashboard({ user }: { user: User }) {
               >
                 <div className="flex justify-between items-start text-xs text-neutral-400 mb-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold uppercase tracking-wider text-neutral-500">Reflection</span>
+                    <span className="font-semibold uppercase tracking-wider text-neutral-500">Entry {index + 1}</span>
                     {entry.mood && (
                       <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold">
                         {entry.mood}
                       </span>
                     )}
                   </div>
-                  <span>{formatDate(entry.createdAt)}</span>
+                  <div className="flex items-center gap-2">
+                    <span>{formatDate(entry.createdAt)}</span>
+                    <button
+                      onClick={() => initiateDelete(entry.id)}
+                      className="text-neutral-400 hover:text-red-600 transition"
+                      title="Delete entry"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <p className="text-neutral-900 font-medium text-sm leading-relaxed whitespace-pre-wrap">{entry.text}</p>
                 <div className="mt-4 pt-3 border-t border-neutral-100 bg-neutral-50/80 -mx-5 -mb-5 p-4 rounded-b-xl">
@@ -273,6 +302,20 @@ export default function Dashboard({ user }: { user: User }) {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {entryToDelete && (
+        <div className="fixed inset-0 bg-neutral-900/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl p-6 shadow-xl max-w-sm w-full">
+            <h3 className="font-bold text-neutral-900 mb-2">Delete Reflection</h3>
+            <p className="text-sm text-neutral-600 mb-6">Are you sure you want to delete this reflection? This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setEntryToDelete(null)} className="flex-1 px-4 py-2 text-sm font-medium text-neutral-600 hover:text-neutral-900">Cancel</button>
+              <button onClick={confirmDelete} className="flex-1 px-4 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
