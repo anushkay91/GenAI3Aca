@@ -1,0 +1,36 @@
+name: ReflectJournal CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    name: Build, Typecheck, and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript Typecheck
+        run: npm run typecheck
+
+      - name: Run Vitest Automated Test Suite
+        run: npm run test
+
+      - name: Run Production Bundle Build
+        run: npm run build
+        env:
+          NODE_ENV: production
