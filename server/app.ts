@@ -5,6 +5,9 @@ import { apiRouter } from "./routes/api";
 export function createExpressApp() {
   const app = express();
 
+  // Trust proxy for correct rate-limiting behind Cloud Run / reverse proxies
+  app.set("trust proxy", 1);
+
   // Basic security headers
   app.use(
     helmet({

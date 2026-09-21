@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const JournalHistoryItemSchema = z.object({
-  text: z.string().min(1).max(2000),
-  aiResponse: z.string().max(2000).default(""),
+  text: z.string().min(1).max(4000),
+  aiResponse: z.string().max(4000).default(""),
   mood: z.string().max(50).optional(),
   score: z.number().int().min(1).max(100).optional(),
   category: z.string().max(50).optional(),

@@ -3,12 +3,14 @@ import { SYSTEM_INSTRUCTION, buildReflectionPrompt } from "../prompts/reflection
 import { ChatResponse, ChatResponseSchema } from "../schemas/chat";
 import { JournalHistoryItem } from "../../src/types/journal";
 
-// Resilient Model Ladder based on supported non-deprecated Gemini models
-const DEFAULT_PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+// Resilient Model Ladder mapping any legacy models to standard active models
+const rawModel = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const primaryModel = rawModel.includes("1.5") ? "gemini-2.5-flash" : rawModel;
 const FALLBACK_MODELS = [
-  DEFAULT_PRIMARY_MODEL,
-  "gemini-3.1-flash-lite",
-  "gemini-flash-latest"
+  primaryModel,
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-3.5-flash"
 ].filter((m, i, arr) => arr.indexOf(m) === i);
 
 interface GenerateOptions {
